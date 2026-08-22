@@ -140,7 +140,7 @@ pub(crate) fn help_text() -> String {
         r#"List the Durable Object instances in the fleet bucket.
 
 USAGE:
-  celld cell list [CLASS] --bucket [s3://|gs://|az://]NAME[/PREFIX] [OPTIONS]
+  celld cell list [CLASS] --bucket [s3://|gs://|az://|file://]NAME[/PREFIX] [OPTIONS]
 
 The listing is bounded by default, because a fleet can hold far more cells
 than an operator wants to read and each request returns at most {page}

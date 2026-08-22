@@ -11,7 +11,9 @@ APIs, and Wrangler configuration.
 - A fleet stores its durable state in an S3-compatible bucket, a Google Cloud
   Storage bucket, or an Azure Blob Storage container. The `celld dev` command
   instead uses a local SQLite object store. A regular node or an operator
-  subcommand cannot select this local backend.
+  subcommand cannot select this local backend. A `file://` bucket names a
+  local directory for fully local development; it is not a shared-filesystem
+  production mode.
 - Ownership balancing counts cells by node weight. It does not measure the
   CPU or memory that one cell uses, and it moves only hibernated cells, so a
   fleet without idle eviction balances only the cells that hibernate on

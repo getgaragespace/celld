@@ -1139,6 +1139,12 @@ impl LtxRepl {
         let store = match backend {
             crate::bucket::StorageBackend::Gcs => crate::bucket::gcs_replica_store(&bucket)?,
             crate::bucket::StorageBackend::Azure => crate::bucket::azure_replica_store(&bucket)?,
+            crate::bucket::StorageBackend::File => {
+                let store: Arc<dyn ObjectStore> =
+                    crate::file_store::ConditionalLocalFileSystem::open(&bucket)
+                        .map_err(|error| anyhow!("build shared object store: {error}"))?;
+                store
+            }
             crate::bucket::StorageBackend::S3 => {
                 node_config(&bucket, endpoint.as_deref(), &region, credentials.as_ref())
                     .build_store()
@@ -1156,7 +1162,8 @@ impl LtxRepl {
             crate::bucket::StorageBackend::Azure => TimestampMetadataKey::Underscore,
             crate::bucket::StorageBackend::S3
             | crate::bucket::StorageBackend::Gcs
-            | crate::bucket::StorageBackend::Local => TimestampMetadataKey::Litestream,
+            | crate::bucket::StorageBackend::Local
+            | crate::bucket::StorageBackend::File => TimestampMetadataKey::Litestream,
         };
         // The tiering flush interval: with a healthy shipper, at most one
         // upload per cell per interval; it is simultaneously the bucket lag

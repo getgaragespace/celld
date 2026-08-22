@@ -266,30 +266,33 @@ pub(crate) fn print_help() -> anyhow::Result<()> {
         r#"celld — self-hosted, distributed Durable Objects
 
 USAGE:
-  celld --bucket [s3://|gs://|az://]NAME[/PREFIX] [OPTIONS]
-  celld deploy [PROJECT] --bucket [s3://|gs://|az://]NAME[/PREFIX] [OPTIONS]
+  celld --bucket [s3://|gs://|az://|file://]NAME[/PREFIX] [OPTIONS]
+  celld deploy [PROJECT] --bucket [s3://|gs://|az://|file://]NAME[/PREFIX] [OPTIONS]
   celld dev [PROJECT] [--host IP] [--port PORT] [--logs]
-  celld cell list [CLASS] --bucket [s3://|gs://|az://]NAME[/PREFIX] [OPTIONS]
-  celld d1 migrations apply DATABASE [PROJECT] --bucket [s3://|gs://|az://]NAME[/PREFIX]
-  celld d1 execute DATABASE --command SQL [PROJECT] --bucket [s3://|gs://|az://]NAME[/PREFIX]
-  celld kv get|put|delete|list|info NAMESPACE --bucket [s3://|gs://|az://]NAME[/PREFIX]
-  celld queue info|peek|purge|pause|resume|redrive QUEUE --bucket [s3://|gs://|az://]NAME[/PREFIX]
-  celld r2 get|head|put|delete|list BUCKET [KEY] --bucket [s3://|gs://|az://]NAME[/PREFIX]
-  celld diagnose --bucket [s3://|gs://|az://]NAME[/PREFIX] [OPTIONS] [--peer NODE_ID]...
+  celld cell list [CLASS] --bucket [s3://|gs://|az://|file://]NAME[/PREFIX] [OPTIONS]
+  celld d1 migrations apply DATABASE [PROJECT] --bucket [s3://|gs://|az://|file://]NAME[/PREFIX]
+  celld d1 execute DATABASE --command SQL [PROJECT] --bucket [s3://|gs://|az://|file://]NAME[/PREFIX]
+  celld kv get|put|delete|list|info NAMESPACE --bucket [s3://|gs://|az://|file://]NAME[/PREFIX]
+  celld queue info|peek|purge|pause|resume|redrive QUEUE --bucket [s3://|gs://|az://|file://]NAME[/PREFIX]
+  celld r2 get|head|put|delete|list BUCKET [KEY] --bucket [s3://|gs://|az://|file://]NAME[/PREFIX]
+  celld diagnose --bucket [s3://|gs://|az://|file://]NAME[/PREFIX] [OPTIONS] [--peer NODE_ID]...
 
 Production install: celld --bucket s3://NAME [OPTIONS]
                     celld --bucket gs://NAME [OPTIONS]
+Local directory:    celld --bucket file:///PATH [OPTIONS]
 
 OPTIONS:
-  --bucket [s3://|gs://|az://]NAME[/PREFIX]
+  --bucket [s3://|gs://|az://|file://]NAME[/PREFIX]
                          Fleet bucket; s3:// (or no scheme) uses the standard
                          AWS credential chain, gs:// selects Google Cloud
                          Storage via Application Default Credentials, az://
                          names an Azure Blob Storage container and takes its
-                         account from AZURE_STORAGE_ACCOUNT_NAME (celld
-                         rejects --endpoint and ignores --region for both). A
-                         PREFIX puts every object under it, so several fleets
-                         can share one bucket
+                         account from AZURE_STORAGE_ACCOUNT_NAME, file://
+                         names a local directory (created when absent; use
+                         file:///PATH@PREFIX to share one directory). celld
+                         rejects --endpoint and ignores --region for gs://,
+                         az://, and file://. A PREFIX puts every object under
+                         it, so several fleets can share one bucket
   --endpoint URL         Optional S3-compatible endpoint
   --region REGION        Storage region (default: AWS_REGION or us-east-1)
   --listen IP:PORT       Public Worker listener (default: 127.0.0.1:8080;

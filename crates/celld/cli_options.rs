@@ -104,8 +104,8 @@ impl FleetFlags {
             .filter(|bucket| !bucket.is_empty())
             .with_context(|| {
                 format!(
-                    "{command} requires --bucket s3://NAME, gs://NAME or az://CONTAINER \
-                     (or CELLD_BUCKET)"
+                    "{command} requires --bucket s3://NAME, gs://NAME, az://CONTAINER, \
+                     or file:///PATH (or CELLD_BUCKET)"
                 )
             })?;
         Ok(Storage {

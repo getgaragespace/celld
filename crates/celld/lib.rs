@@ -354,6 +354,7 @@ pub mod http_streams;
 pub mod js;
 pub mod kv_blob;
 pub mod kv_cli;
+pub mod file_store;
 pub(crate) mod local_store;
 pub mod ltx_repl;
 pub mod ltx_replication;

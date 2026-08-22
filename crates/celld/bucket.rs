@@ -11,7 +11,9 @@
 //! both headers, so only the client and the credentials differ. A
 //! `gs://` spec speaks the Cloud Storage XML API dialect: the CAS token
 //! is the object generation, sent as x-goog-if-generation-match with
-//! OAuth credentials. The distinction is the dialect, not the endpoint —
+//! OAuth credentials. A `file://` spec uses the same etag dialect on a
+//! local directory via [`crate::file_store::ConditionalLocalFileSystem`]. The distinction is
+//! the dialect, not the endpoint —
 //! GCS accepts S3-style requests on the same host but does not apply
 //! If-Match to a PUT, so only the generation dialect can fence there.
 //! Callers never see the difference: the token is an opaque `String` a
@@ -89,6 +91,7 @@ pub enum StorageBackend {
     Gcs,
     Azure,
     Local,
+    File,
 }
 
 impl StorageBackend {
@@ -98,6 +101,7 @@ impl StorageBackend {
             StorageBackend::Gcs => "gs",
             StorageBackend::Azure => "az",
             StorageBackend::Local => "dev",
+            StorageBackend::File => "file",
         }
     }
 
@@ -108,7 +112,8 @@ impl StorageBackend {
     #[doc(hidden)]
     pub fn token(self, e_tag: Option<String>, version: Option<String>) -> anyhow::Result<String> {
         let (token, header) = match self {
-            StorageBackend::S3 | StorageBackend::Azure | StorageBackend::Local => (e_tag, "ETag"),
+            StorageBackend::S3 | StorageBackend::Azure | StorageBackend::Local
+            | StorageBackend::File => (e_tag, "ETag"),
             StorageBackend::Gcs => (version, "x-goog-generation"),
         };
         match token {
@@ -123,7 +128,8 @@ impl StorageBackend {
     #[doc(hidden)]
     pub fn update(self, token: &str) -> UpdateVersion {
         match self {
-            StorageBackend::S3 | StorageBackend::Azure | StorageBackend::Local => UpdateVersion {
+            StorageBackend::S3 | StorageBackend::Azure | StorageBackend::Local
+            | StorageBackend::File => UpdateVersion {
                 e_tag: Some(token.to_string()),
                 version: None,
             },
@@ -140,7 +146,8 @@ impl StorageBackend {
     /// wrong place.
     fn precondition(self) -> &'static str {
         match self {
-            StorageBackend::S3 | StorageBackend::Azure | StorageBackend::Local => {
+            StorageBackend::S3 | StorageBackend::Azure | StorageBackend::Local
+            | StorageBackend::File => {
                 "If-Match / If-None-Match"
             }
             StorageBackend::Gcs => "x-goog-if-generation-match",
@@ -165,7 +172,10 @@ impl StorageBackend {
     fn metadata_name(self, name: &str) -> Cow<'_, str> {
         match self {
             StorageBackend::Azure => Cow::Owned(name.replace('-', "_")),
-            StorageBackend::S3 | StorageBackend::Gcs | StorageBackend::Local => Cow::Borrowed(name),
+            StorageBackend::S3
+            | StorageBackend::Gcs
+            | StorageBackend::Local
+            | StorageBackend::File => Cow::Borrowed(name),
         }
     }
 }
@@ -265,7 +275,7 @@ pub fn cas_write_did_not_commit(error: &anyhow::Error) -> bool {
     })
 }
 
-/// Split a `[s3://|gs://|az://]NAME[/PREFIX]` bucket spec into the
+/// Split a `[s3://|gs://|az://|file://]NAME[/PREFIX]` bucket spec into the
 /// backend, the bucket name and a normalized key prefix: empty, or
 /// slash-terminated. A spec without a scheme stays S3-compatible, and a
 /// spec without a PREFIX keeps every key at the bucket root, so a fleet
@@ -274,8 +284,12 @@ pub fn cas_write_did_not_commit(error: &anyhow::Error) -> bool {
 ///
 /// On `az://` the NAME is the container, and the storage account comes
 /// from `AZURE_STORAGE_ACCOUNT_NAME`. The second path segment is the key
-/// prefix on all three schemes, so the account cannot live there without
+/// prefix on all three cloud schemes, so the account cannot live there without
 /// making `az://` parse differently from the other two.
+///
+/// On `file://` the NAME is an absolute or relative directory path. An
+/// optional key prefix after `@` shares one directory across fleets, e.g.
+/// `file:///tmp/shared@fleet-a`.
 #[doc(hidden)]
 pub fn split_spec(spec: &str) -> (StorageBackend, &str, String) {
     let strip_scheme = |scheme: &str| {
@@ -283,6 +297,16 @@ pub fn split_spec(spec: &str) -> (StorageBackend, &str, String) {
             .filter(|candidate| candidate.eq_ignore_ascii_case(scheme))
             .map(|_| &spec[scheme.len()..])
     };
+    if let Some(rest) = strip_scheme("file://") {
+        let (path, prefix) = match rest.rsplit_once('@') {
+            Some((path, prefix)) => {
+                let parts = prefix.split('/').filter(|part| !part.is_empty());
+                (path, parts.map(|part| format!("{part}/")).collect())
+            }
+            None => (rest, String::new()),
+        };
+        return (StorageBackend::File, path, prefix);
+    }
     let (backend, spec) = if let Some(rest) = strip_scheme("gs://") {
         (StorageBackend::Gcs, rest)
     } else if let Some(rest) = strip_scheme("az://") {
@@ -601,7 +625,7 @@ impl Bucket {
         }
     }
 
-    /// `bucket` is `[s3://|gs://|az://]NAME[/PREFIX]`. With a PREFIX every
+    /// `bucket` is `[s3://|gs://|az://|file://]NAME[/PREFIX]`. With a PREFIX every
     /// key this client reads or writes lives under `PREFIX/`, so several
     /// fleets can share one bucket without colliding.
     ///
@@ -614,6 +638,9 @@ impl Bucket {
     /// account from `AZURE_STORAGE_ACCOUNT_NAME`, and authenticates with a
     /// storage account key, a managed identity, or a workload identity. It
     /// takes no S3 endpoint, static credentials, or region either.
+    ///
+    /// A `file://` bucket names a local directory and needs no credentials,
+    /// endpoint, or region. The directory is created when absent.
     ///
     /// `app` labels this client's traffic in the User-Agent (the aws
     /// AppName format, `app/<name>`), keeping e.g. the lease safety lane
@@ -825,6 +852,20 @@ impl Bucket {
             StorageBackend::Local => {
                 unreachable!("the local development store has its own constructor")
             }
+            StorageBackend::File => {
+                if endpoint.is_some() {
+                    anyhow::bail!(
+                        "a file:// bucket takes no S3 endpoint; unset --endpoint / S3_ENDPOINT"
+                    );
+                }
+                if credentials.is_some() {
+                    anyhow::bail!("a file:// bucket cannot use S3 static credentials");
+                }
+                let root = std::path::Path::new(bucket);
+                let store = crate::file_store::ConditionalLocalFileSystem::open(root)
+                    .context("build local filesystem client")?;
+                (store.clone(), store.clone(), store)
+            }
         };
         Ok(Bucket {
             store,
@@ -836,7 +877,7 @@ impl Bucket {
         })
     }
 
-    /// The bucket's URL scheme, `s3`, `gs` or `az`, for operator-facing
+    /// The bucket's URL scheme, `s3`, `gs`, `az`, or `file`, for operator-facing
     /// messages.
     pub fn scheme(&self) -> &'static str {
         self.backend.scheme()
@@ -975,6 +1016,13 @@ impl Bucket {
         key: &str,
         name: &str,
     ) -> anyhow::Result<Option<(u64, Option<String>)>> {
+        if self.backend == StorageBackend::File {
+            let _ = name;
+            return match self.head(key).await? {
+                Some((size, _)) => Ok(Some((size, None))),
+                None => Ok(None),
+            };
+        }
         let key = self.key(key);
         let options = GetOptions {
             head: true,
@@ -1006,6 +1054,10 @@ impl Bucket {
         body: impl Into<PutPayload>,
         meta: &[(&'static str, &str)],
     ) -> anyhow::Result<()> {
+        if self.backend == StorageBackend::File {
+            let _ = meta;
+            return self.put(key, body).await;
+        }
         let key = self.key(key);
         let attributes = BlobAttributes {
             metadata: meta

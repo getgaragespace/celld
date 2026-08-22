@@ -50,7 +50,7 @@ hyper-util.workspace = true
 md-5.workspace = true
 notify.workspace = true
 nu-ansi-term.workspace = true
-object_store = { workspace = true, features = ["aws", "azure", "gcp"] }
+object_store = { workspace = true, features = ["aws", "azure", "fs", "gcp"] }
 parquet.workspace = true
 pbkdf2.workspace = true
 percent-encoding.workspace = true

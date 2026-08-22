@@ -579,8 +579,8 @@ pub async fn run_deploy(arguments: Vec<String>) -> anyhow::Result<()> {
     );
     if !options.dry_run && options.bucket.is_none() {
         bail!(
-            "celld deploy requires --bucket s3://NAME, gs://NAME or az://CONTAINER \
-             (or CELLD_BUCKET)"
+            "celld deploy requires --bucket s3://NAME, gs://NAME, az://CONTAINER, or \
+             file:///PATH (or CELLD_BUCKET)"
         );
     }
     let built = deploy::build(&options)?;
