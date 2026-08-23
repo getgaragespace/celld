@@ -427,6 +427,16 @@ pub fn schema(c: &Connection) -> anyhow::Result<()> {
           PRIMARY KEY(scope,path)) WITHOUT ROWID",
         [],
     )?;
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS _celld_analytics_outbox \
+         (id INTEGER PRIMARY KEY AUTOINCREMENT, \
+          table_name TEXT NOT NULL, \
+          op TEXT NOT NULL, \
+          row_key TEXT, \
+          payload BLOB, \
+          published INTEGER NOT NULL DEFAULT 0)",
+        [],
+    )?;
     let alarm_columns = {
         let mut statement = c.prepare("PRAGMA table_info(_cf_ALARM)")?;
         let columns = statement.query_map([], |row| row.get::<_, String>(1))?;
@@ -481,7 +491,10 @@ fn is_reserved_sql_name(name: &str) -> bool {
             // The ltx replicator's control tables predate the `_cf_` prefix
             // convention; application SQL that touches them breaks WAL
             // capture for the cell, so they are reserved the same way.
-            || celld_ltx::db::is_control_table(name))
+            || celld_ltx::db::is_control_table(name)
+            || name
+                .get(..7)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("_celld_")))
 }
 
 fn valid_sql_boolean(value: &str) -> bool {

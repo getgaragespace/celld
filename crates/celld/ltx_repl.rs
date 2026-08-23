@@ -47,7 +47,9 @@ use tokio::sync::Semaphore;
 use tracing::info;
 use tracing::warn;
 
+use crate::analytics::{self, AnalyticsBatchConfig, AnalyticsHead};
 use crate::asyncrt;
+use crate::bucket::{Bucket, StorageBackend};
 use crate::replication::sqlite_snapshot;
 use crate::replication::ActivationOptions;
 use crate::replication::ActivationResult;
@@ -717,6 +719,20 @@ struct HandoffSnapshot {
     data: Vec<u8>,
 }
 
+/// Shared analytics configuration for every resident cell on this node.
+struct SharedAnalytics {
+    ack: bool,
+    bucket: Arc<Bucket>,
+    batch: AnalyticsBatchConfig,
+    classes: BTreeSet<String>,
+}
+
+struct CellAnalytics {
+    head: Mutex<Option<AnalyticsHead>>,
+    head_token: Mutex<Option<String>>,
+    pending_since_ms: AtomicU64,
+}
+
 /// One resident cell's replication state: the `celld_ltx::Db` shadowing its WAL
 /// (behind a `std::sync::Mutex` because the `rusqlite` handle is `!Sync` and
 /// must never cross an `.await`, so every capture+upload runs inside a
@@ -738,12 +754,19 @@ struct Cell {
     /// and a handoff snapshot built from it would publish hole-zeros as data.
     paged_vfs: Option<String>,
     hydration: Option<Arc<CellHydration>>,
+    cell: String,
+    epoch: u64,
+    db_path: PathBuf,
     replica: Mutex<Option<Replica<SharedObjectStoreClient>>>,
     /// The same epoch-prefix client the replica holds, for uploads that run
     /// off the replica mutex.
     client: SharedObjectStoreClient,
     req_seq: AtomicU64,
     synced_seq: AtomicU64,
+    analytics_seq: AtomicU64,
+    analytics_synced_seq: AtomicU64,
+    analytics_enabled: bool,
+    analytics: Option<CellAnalytics>,
     /// Highest ticket whose write is fsync'd on every ensemble member —
     /// the log tier's proof. The gate accepts either proof, so this stays 0
     /// forever when no shipper is installed.
@@ -1031,6 +1054,7 @@ pub struct LtxRepl {
     /// because each truncate boundary emits a full image of their unbounded
     /// backlog.
     truncate_pages: Option<u32>,
+    analytics: Arc<Mutex<SharedAnalytics>>,
 }
 
 impl LtxRepl {
@@ -1080,6 +1104,7 @@ impl LtxRepl {
         Self::assemble(
             watch,
             store,
+            StorageBackend::File,
             TimestampMetadataKey::default(),
             "test".into(),
             String::new(),
@@ -1105,6 +1130,7 @@ impl LtxRepl {
         Self::assemble(
             watch,
             store,
+            StorageBackend::File,
             TimestampMetadataKey::default(),
             "test".into(),
             String::new(),
@@ -1121,6 +1147,55 @@ impl LtxRepl {
             None,
             DEFAULT_DURABILITY_TIMEOUT_SECS * 1_000,
         )
+    }
+
+    pub fn configure_analytics(&self, classes: &[String]) {
+        let mut analytics = self.analytics.lock().unwrap();
+        analytics.classes = classes.iter().cloned().collect();
+    }
+
+    #[doc(hidden)]
+    pub fn set_analytics_ack_for_test(&self, ack: bool) {
+        self.analytics.lock().unwrap().ack = ack;
+    }
+
+    fn analytics_enabled_for_cell(&self, cell: &str) -> bool {
+        let class = cell.split_once(':').map(|(class, _)| class);
+        let Some(class) = class else {
+            return false;
+        };
+        self.analytics.lock().unwrap().classes.contains(class)
+    }
+
+    fn cell_needs_work(cell: &Cell, analytics_ack: bool) -> bool {
+        cell.req_seq.load(Ordering::SeqCst) > cell.synced_seq.load(Ordering::SeqCst)
+            || (analytics_ack
+                && cell.analytics_enabled
+                && cell.analytics_seq.load(Ordering::SeqCst)
+                    > cell.analytics_synced_seq.load(Ordering::SeqCst))
+    }
+
+    /// Run SQL against a resident cell db (integration harness).
+    #[doc(hidden)]
+    pub async fn exec_cell_sql(&self, cell: &str, epoch: u64, sql: &str) -> anyhow::Result<()> {
+        let handle = self
+            .cells
+            .lock()
+            .unwrap()
+            .get(&(cell.to_string(), epoch))
+            .cloned()
+            .ok_or_else(|| anyhow!("ltx cell not resident: {cell} epoch {epoch}"))?;
+        let cell = cell.to_string();
+        let sql = sql.to_string();
+        asyncrt::blocking(move || {
+            let mut replica = handle.replica.lock().unwrap();
+            let db = managed_db_mut(&mut replica)
+                .ok_or_else(|| anyhow!("cell db is closed: {cell}"))?;
+            db.exec_sql_batch(&sql)?;
+            db.sync().map_err(|error| anyhow!("sync after sql: {error}"))?;
+            Ok(())
+        })
+        .await?
     }
 
     pub(crate) fn start(
@@ -1179,6 +1254,7 @@ impl LtxRepl {
         Ok(Self::assemble(
             watch,
             store,
+            backend,
             timestamp_metadata_key,
             bucket,
             prefix,
@@ -1198,6 +1274,7 @@ impl LtxRepl {
     fn assemble(
         watch: &Path,
         store: Arc<dyn ObjectStore>,
+        backend: StorageBackend,
         timestamp_metadata_key: TimestampMetadataKey,
         bucket: String,
         prefix: String,
@@ -1221,6 +1298,21 @@ impl LtxRepl {
         let preserved = Mutex::new(crate::replication::PreservedCache::new(
             ltx_host.filesystem(),
         ));
+        let analytics_bucket = Arc::new(Bucket::sharing(
+            store.clone(),
+            backend,
+            bucket.clone(),
+            prefix.clone(),
+        ));
+        let analytics = Arc::new(Mutex::new(SharedAnalytics {
+            ack: crate::env_vars::flag("CELLD_ANALYTICS_ACK", false).unwrap_or(false),
+            bucket: analytics_bucket,
+            batch: AnalyticsBatchConfig::from_env().unwrap_or(AnalyticsBatchConfig {
+                max_txids: 64,
+                max_ms: 250,
+            }),
+            classes: BTreeSet::new(),
+        }));
         // Retain every root until the unique durability owner claims them.
         // Dropping a task handle detaches the task, so a cloneable replicator
         // cannot be the final lifecycle capability.
@@ -1233,6 +1325,7 @@ impl LtxRepl {
                 registration.clone(),
                 stop.clone(),
                 tasks.clone(),
+                analytics.clone(),
                 flush_ms,
             ),
         );
@@ -1248,7 +1341,13 @@ impl LtxRepl {
         );
         tasks.spawn_owned(
             "ltx_bundle",
-            bundle_loop(cells.clone(), registration.clone(), stop.clone(), flush_ms),
+            bundle_loop(
+                cells.clone(),
+                registration.clone(),
+                stop.clone(),
+                analytics.clone(),
+                flush_ms,
+            ),
         );
         let compaction_queue =
             compaction.map(|config| start_compaction_loop(config, tasks.clone()));
@@ -1317,6 +1416,7 @@ impl LtxRepl {
                     .flatten()
                     .unwrap_or(DEFAULT_TRUNCATE_PAGES),
             ),
+            analytics,
         }
     }
 
@@ -2055,14 +2155,26 @@ impl LtxRepl {
                     complete: AtomicBool::new(false),
                 })
             });
+        let analytics_enabled = self.analytics_enabled_for_cell(cell);
         let handle = Arc::new(Cell {
             snapshot_declined: AtomicBool::new(false),
             paged_vfs: paged_vfs_name.clone(),
             hydration: hydration.clone(),
+            cell: cell.to_string(),
+            epoch,
+            db_path: dst.clone(),
             replica: Mutex::new(Some(replica)),
             client: client.clone(),
             req_seq: AtomicU64::new(0),
             synced_seq: AtomicU64::new(0),
+            analytics_seq: AtomicU64::new(0),
+            analytics_synced_seq: AtomicU64::new(0),
+            analytics_enabled,
+            analytics: analytics_enabled.then(|| CellAnalytics {
+                head: Mutex::new(None),
+                head_token: Mutex::new(None),
+                pending_since_ms: AtomicU64::new(0),
+            }),
             shipped_seq: AtomicU64::new(0),
             submitted_seq: AtomicU64::new(0),
             // Frames at or below the seed came from the bucket (or a proven
@@ -2378,6 +2490,10 @@ impl LtxRepl {
             anyhow::bail!("ltx cell not resident: {cell} epoch {epoch}");
         };
         let ticket = handle.req_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        let analytics_ack = self.analytics.lock().unwrap().ack;
+        if handle.analytics_enabled && analytics_ack {
+            handle.analytics_seq.fetch_max(ticket, Ordering::SeqCst);
+        }
         #[cfg(all(test, celld_internal_tests))]
         handle.record_durability_ticket_for_world(position, ticket);
         self.dirty.notify_one();
@@ -2486,6 +2602,7 @@ impl LtxRepl {
             budget_ms: self.durability_timeout_ms,
         };
         let started = wait.started_ms;
+        let analytics_ack = self.analytics.lock().unwrap().ack;
         loop {
             // Register the waiter before checking, so a sync that completes
             // between the check and the await is not missed. Either proof
@@ -2495,7 +2612,11 @@ impl LtxRepl {
             // Prefer the fleet proof when both hold: it is the arbitrated
             // one, and it spares the caller an ownership read.
             let shipped = handle.shipped_seq.load(Ordering::SeqCst) >= ticket;
-            if handle.synced_seq.load(Ordering::SeqCst) >= ticket || shipped {
+            let ltx_ready = handle.synced_seq.load(Ordering::SeqCst) >= ticket || shipped;
+            let analytics_ready = !handle.analytics_enabled
+                || !analytics_ack
+                || handle.analytics_synced_seq.load(Ordering::SeqCst) >= ticket;
+            if ltx_ready && analytics_ready {
                 let source = if shipped {
                     celld_logic::ProofSource::Fleet
                 } else {
@@ -2544,7 +2665,7 @@ impl LtxRepl {
         else {
             return SyncWait::Unsupported;
         };
-        match asyncrt::timeout(timeout, sync_cell(handle.clone())).await {
+        match asyncrt::timeout(timeout, sync_cell(handle.clone(), self.analytics.clone())).await {
             Ok(Some(true)) => SyncWait::Durable,
             Ok(Some(false)) | Err(_) => SyncWait::Failed,
             Ok(None) => SyncWait::Unsupported,
@@ -3328,6 +3449,85 @@ impl LtxRepl {
     }
 }
 
+/// Publish analytics deltas after LTX is durable for this cell.
+async fn publish_analytics(
+    handle: &CellHandle,
+    bucket: &Bucket,
+    batch: &AnalyticsBatchConfig,
+    ack: bool,
+    captured: u64,
+    durable_txid: u64,
+) -> bool {
+    if !handle.analytics_enabled || !ack {
+        handle
+            .analytics_synced_seq
+            .fetch_max(captured, Ordering::SeqCst);
+        return true;
+    }
+    let Some(analytics) = &handle.analytics else {
+        handle
+            .analytics_synced_seq
+            .fetch_max(captured, Ordering::SeqCst);
+        return true;
+    };
+    let force = captured > handle.analytics_synced_seq.load(Ordering::SeqCst);
+    let pending_since = analytics.pending_since_ms.load(Ordering::SeqCst);
+    let prior_head = analytics.head.lock().unwrap().clone();
+    let prior_token = analytics.head_token.lock().unwrap().clone();
+    // A paged activation's local file is a sparse cache of the cut, so the
+    // outbox is read through the cell's VFS.
+    let vfs = handle.paged_vfs.as_deref();
+    match analytics::drain_outbox(
+        bucket,
+        &handle.cell,
+        handle.epoch,
+        &handle.db_path,
+        vfs,
+        durable_txid as i64,
+        batch,
+        pending_since,
+        force,
+        prior_head.as_ref(),
+        prior_token.as_deref(),
+    )
+    .await
+    {
+        Ok(Some((head, token))) => {
+            *analytics.head.lock().unwrap() = Some(head);
+            *analytics.head_token.lock().unwrap() = Some(token);
+            analytics.pending_since_ms.store(0, Ordering::SeqCst);
+            handle
+                .analytics_synced_seq
+                .fetch_max(captured, Ordering::SeqCst);
+            true
+        }
+        Ok(None) => {
+            let still_pending =
+                analytics::read_unpublished_outbox(&handle.db_path, vfs, durable_txid as i64, 1)
+                    .map(|rows| !rows.is_empty())
+                    .unwrap_or(true);
+            if still_pending {
+                if analytics.pending_since_ms.load(Ordering::SeqCst) == 0 {
+                    analytics
+                        .pending_since_ms
+                        .store(asyncrt::wall_ms().max(0) as u64, Ordering::SeqCst);
+                }
+                if force {
+                    return false;
+                }
+            }
+            handle
+                .analytics_synced_seq
+                .fetch_max(captured, Ordering::SeqCst);
+            true
+        }
+        Err(error) => {
+            warn!(%error, cell = %handle.cell, "analytics outbox drain failed");
+            false
+        }
+    }
+}
+
 /// One capture+upload for a cell: advance its durable position on success and
 /// wake its waiters. Everything committed before the capture is durable once
 /// uploaded, so the target is read before `db.sync`.
@@ -3342,7 +3542,7 @@ impl LtxRepl {
 ///
 /// `Some(true)` means success, `Some(false)` means failure, and `None` means
 /// that the replica lost its database.
-async fn sync_cell(handle: CellHandle) -> Option<bool> {
+async fn sync_cell(handle: CellHandle, analytics: Arc<Mutex<SharedAnalytics>>) -> Option<bool> {
     // Tickets taken before the capture: their writes committed before
     // `db.sync` runs, so it captures them. Read before the capture so a
     // ticket taken during the sync is credited by the next one, not this.
@@ -3453,7 +3653,16 @@ async fn sync_cell(handle: CellHandle) -> Option<bool> {
         handle.pause_after_sync_credit_for_world().await;
     }
     handle.synced_seq.fetch_max(captured, Ordering::SeqCst);
-    maybe_queue_compaction(&handle, handle.durable_txid.load(Ordering::SeqCst));
+    let durable_txid = handle.durable_txid.load(Ordering::SeqCst);
+    let (bucket, batch, ack) = {
+        let shared = analytics.lock().unwrap();
+        (Arc::clone(&shared.bucket), shared.batch, shared.ack)
+    };
+    if !publish_analytics(&handle, &bucket, &batch, ack, captured, durable_txid).await {
+        handle.ready.notify_waiters();
+        return Some(false);
+    }
+    maybe_queue_compaction(&handle, durable_txid);
     handle
         .last_sync_ms
         .store(asyncrt::wall_ms().max(0) as u64, Ordering::SeqCst);
@@ -3799,6 +4008,7 @@ fn compaction_config_from_env() -> anyhow::Result<Option<CompactionConfig>> {
 /// never stalls the others (a cell keeps its own cadence up to the concurrency
 /// bound). A cell's writes reported between its syncs still clear on one upload:
 /// the batching win, without the cross-cell head-of-line blocking.
+#[allow(clippy::too_many_arguments)]
 async fn sync_loop(
     cells: Arc<Mutex<BTreeMap<(String, u64), CellHandle>>>,
     dirty: Arc<Notify>,
@@ -3806,6 +4016,7 @@ async fn sync_loop(
     registration: Arc<Mutex<RegistrationState>>,
     stop: StopToken,
     sync_tasks: TaskGroup,
+    analytics: Arc<Mutex<SharedAnalytics>>,
     flush_ms: u64,
 ) {
     loop {
@@ -3844,11 +4055,12 @@ async fn sync_loop(
                 .as_ref()
                 .is_some_and(|targets| targets.manager.bundle_active());
         let now = asyncrt::wall_ms().max(0) as u64;
+        let analytics_ack = analytics.lock().unwrap().ack;
         let work: Vec<CellHandle> = {
             let map = cells.lock().unwrap();
             map.values()
                 .filter(|c| {
-                    c.req_seq.load(Ordering::SeqCst) > c.synced_seq.load(Ordering::SeqCst)
+                    LtxRepl::cell_needs_work(c, analytics_ack)
                         && !bundling
                         && (!paced
                             || now.saturating_sub(c.last_sync_ms.load(Ordering::SeqCst))
@@ -3869,6 +4081,7 @@ async fn sync_loop(
             let slots = slots.clone();
             let dirty = dirty.clone();
             let worker_stop = stop.clone();
+            let analytics = analytics.clone();
             sync_tasks.spawn_owned("ltx_cell_sync", async move {
                 // Keep syncing this cell while it stays dirty, rather than
                 // notifying the main loop to re-scan every completion — that made
@@ -3883,7 +4096,7 @@ async fn sync_loop(
                     }
                     let ok = {
                         let _permit = slots.acquire().await;
-                        sync_cell(cell.clone()).await
+                        sync_cell(cell.clone(), analytics.clone()).await
                     };
                     // Registry removal closes the replica while this owned
                     // task can still own the Cell. A closed slot cannot become
@@ -3891,8 +4104,8 @@ async fn sync_loop(
                     if ok.is_none() {
                         break;
                     }
-                    if cell.req_seq.load(Ordering::SeqCst) <= cell.synced_seq.load(Ordering::SeqCst)
-                    {
+                    let analytics_ack = analytics.lock().unwrap().ack;
+                    if !LtxRepl::cell_needs_work(&cell, analytics_ack) {
                         break;
                     }
                     // Under pacing, one upload per wake: the next round waits
@@ -3911,9 +4124,8 @@ async fn sync_loop(
                 cell.syncing.store(false, Ordering::SeqCst);
                 // A write landing in the clear window is picked up next tick;
                 // nudge the loop so it does not wait the full interval.
-                if !worker_stop.is_stopped()
-                    && cell.req_seq.load(Ordering::SeqCst) > cell.synced_seq.load(Ordering::SeqCst)
-                {
+                let analytics_ack = analytics.lock().unwrap().ack;
+                if !worker_stop.is_stopped() && LtxRepl::cell_needs_work(&cell, analytics_ack) {
                     dirty.notify_one();
                 }
             });
@@ -3933,6 +4145,7 @@ async fn bundle_loop(
     cells: Arc<Mutex<BTreeMap<(String, u64), CellHandle>>>,
     registration: Arc<Mutex<RegistrationState>>,
     stop: StopToken,
+    analytics: Arc<Mutex<SharedAnalytics>>,
     flush_ms: u64,
 ) {
     if flush_ms == 0 {
@@ -3950,12 +4163,11 @@ async fn bundle_loop(
         let Some(active) = installed.filter(|sink| sink.bundle_active()) else {
             continue;
         };
+        let analytics_ack = analytics.lock().unwrap().ack;
         let work: Vec<((String, u64), CellHandle)> = {
             let map = cells.lock().unwrap();
             map.iter()
-                .filter(|(_, cell)| {
-                    cell.req_seq.load(Ordering::SeqCst) > cell.synced_seq.load(Ordering::SeqCst)
-                })
+                .filter(|(_, cell)| LtxRepl::cell_needs_work(cell, analytics_ack))
                 .map(|(key, cell)| (key.clone(), cell.clone()))
                 .collect()
         };
@@ -4023,8 +4235,15 @@ async fn bundle_loop(
                 handle
                     .last_sync_ms
                     .store(asyncrt::wall_ms().max(0) as u64, Ordering::SeqCst);
-                // Bundle credits also queue the overlay compactor.
-                maybe_queue_compaction(&handle, position);
+                let (bucket, batch, ack) = {
+                    let shared = analytics.lock().unwrap();
+                    (Arc::clone(&shared.bucket), shared.batch, shared.ack)
+                };
+                // Bundle credits also queue the overlay compactor, once the
+                // cell's analytics deltas are out.
+                if publish_analytics(&handle, &bucket, &batch, ack, tickets, position).await {
+                    maybe_queue_compaction(&handle, position);
+                }
                 note_proof(&handle);
                 handle.ready.notify_waiters();
             }

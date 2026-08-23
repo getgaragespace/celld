@@ -93,4 +93,11 @@ libc.workspace = true
 nix.workspace = true
 
 [dev-dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+duckdb = { version = "1.2", features = ["bundled"] }
+futures-util.workspace = true
 lz4_flex.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["full"] }

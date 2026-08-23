@@ -38,6 +38,7 @@ pub(crate) enum Action {
     Deploy(Vec<String>),
     Dev(Vec<String>),
     Cell(Vec<String>),
+    Lake(Vec<String>),
     D1(Vec<String>),
     Kv(Vec<String>),
     Queue(Vec<String>),
@@ -75,6 +76,7 @@ pub(crate) fn action_from_process() -> anyhow::Result<Action> {
             "deploy" => return Ok(Action::Deploy(arguments)),
             "dev" => return Ok(Action::Dev(arguments)),
             "cell" => return Ok(Action::Cell(arguments)),
+            "lake" => return Ok(Action::Lake(arguments)),
             "d1" => return Ok(Action::D1(arguments)),
             "kv" => return Ok(Action::Kv(arguments)),
             "queue" => return Ok(Action::Queue(arguments)),
@@ -377,6 +379,9 @@ TUNING:
   CELLD_LOG_PIPELINE              Fleet log rounds in flight (default: 4)
   CELLD_LOG_HEDGE_MS              Duplicate a slow log append (default: adaptive; 0 disables)
   CELLD_LTX_TRUNCATE_PAGES        WAL pages before a truncate checkpoint (default: 128; Queues never truncate; 0 disables)
+  CELLD_ANALYTICS_ACK             `1` gates client ack on analytics HEAD proof
+  CELLD_ANALYTICS_BATCH_TXIDS     Outbox rows coalesced per delta (default: 64)
+  CELLD_ANALYTICS_BATCH_MS        Max coalesce delay before flush (default: 250)
   RUST_LOG                        Runtime log filter (default: info)
 
 Documentation: https://celld.dev/docs"#,

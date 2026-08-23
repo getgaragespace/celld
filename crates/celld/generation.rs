@@ -116,6 +116,15 @@ pub struct DeploymentGraph {
 }
 
 impl DeploymentGraph {
+    /// Every script's analytics classes: the Durable Object classes whose
+    /// cells drain an analytics outbox.
+    pub fn analytics_classes(&self) -> Vec<String> {
+        std::iter::once(&self.primary)
+            .chain(&self.cohosted)
+            .flat_map(|deployment| deployment.analytics_classes.iter().cloned())
+            .collect()
+    }
+
     /// One script and nothing else: the local-script mode a runtime test
     /// starts from a file, which declares no services and has no bucket to
     /// resolve them from.

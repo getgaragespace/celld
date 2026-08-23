@@ -126,6 +126,7 @@ A cell fits a workload that divides into named, stateful units:
 - [Services](#services)
 - [Cloudflare compatibility](cloudflare-compat.md)
 - [What celld guarantees](guarantees.md)
+- [Fleet analytics lake](analytics-lake.md)
 - [Limitations](limitations.md)
 - [Security](security.md)
 - [Telemetry](telemetry.md)

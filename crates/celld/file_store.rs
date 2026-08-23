@@ -317,6 +317,24 @@ impl PaginatedListStore for ConditionalLocalFileSystem {
     }
 }
 
+/// Paginated listing for a store that can only list everything under a
+/// prefix.
+pub struct ListedPages(pub Arc<dyn ObjectStore>);
+
+#[async_trait::async_trait]
+impl PaginatedListStore for ListedPages {
+    async fn list_paginated(
+        &self,
+        prefix: Option<&str>,
+        options: PaginatedListOptions,
+    ) -> Result<PaginatedListResult, Error> {
+        let prefix = prefix.unwrap_or_default();
+        let directory = prefix.rsplit_once('/').map(|(directory, _)| Path::from(directory));
+        let objects: Vec<ObjectMeta> = self.0.list(directory.as_ref()).try_collect().await?;
+        paginate_listing(objects, prefix, &options)
+    }
+}
+
 /// One page of a key-ordered listing, as a paginated store answers it:
 /// keys after the page token (or offset), the keys below a delimiter folded
 /// into their common prefix, and a page token when `max_keys` cut the page.

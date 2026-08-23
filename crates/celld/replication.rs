@@ -72,6 +72,7 @@ impl std::fmt::Display for EvictionAbandoned {
 impl std::error::Error for EvictionAbandoned {}
 
 /// Outcome of a blocking replication wait on one cell db.
+#[derive(Debug)]
 pub enum SyncWait {
     /// The latest local commit is in the bucket.
     Durable,

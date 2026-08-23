@@ -297,6 +297,7 @@ macro_rules! __celld_domain_select_biased {
 }
 
 pub mod actor;
+pub mod analytics;
 #[cfg(all(test, celld_internal_tests))]
 mod conformance_core_loop_tests {
     include!(env!("CELLD_CONFORMANCE_CORE_LOOP_TESTS"));
@@ -354,6 +355,7 @@ pub mod http_streams;
 pub mod js;
 pub mod kv_blob;
 pub mod kv_cli;
+pub mod lake;
 pub mod file_store;
 pub(crate) mod local_store;
 pub mod ltx_repl;

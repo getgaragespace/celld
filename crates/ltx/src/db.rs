@@ -930,6 +930,15 @@ impl Db {
         self.last_sync_timing
     }
 
+    /// Run one or more SQL statements. Used by celld's analytics integration
+    /// harness; not on the Worker hot path.
+    #[doc(hidden)]
+    pub fn exec_sql_batch(&mut self, sql: &str) -> Result<()> {
+        self.ensure_wal_exists()?;
+        self.conn.execute_batch(sql).map_err(sql_err)?;
+        Ok(())
+    }
+
     /// Copies pending data from the WAL into the next L0 LTX file and applies
     /// the checkpoint policy.
     ///

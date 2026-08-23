@@ -214,6 +214,7 @@ pub fn validate() -> anyhow::Result<()> {
 
     for name in [
         "CELLD_CLOUD",
+        "CELLD_ANALYTICS_ACK",
         "CELLD_LTX_COMPACTION",
         "CELLD_LTX_PAGED",
         "CELLD_TRUST_FORWARDED_HEADERS",
@@ -223,6 +224,8 @@ pub fn validate() -> anyhow::Result<()> {
     }
 
     for name in [
+        "CELLD_ANALYTICS_BATCH_MS",
+        "CELLD_ANALYTICS_BATCH_TXIDS",
         "CELLD_ACTIVATIONS",
         "CELLD_DEPLOY_POLL_S",
         "CELLD_FETCH_TIMEOUT_S",

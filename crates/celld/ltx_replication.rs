@@ -54,6 +54,10 @@ impl Replication {
         self.ltx.clone()
     }
 
+    pub fn configure_analytics(&self, classes: &[String]) {
+        self.ltx.configure_analytics(classes);
+    }
+
     pub(crate) async fn restore(
         &self,
         cell: &str,

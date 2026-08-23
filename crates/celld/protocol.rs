@@ -23,6 +23,9 @@ pub struct Manifest {
     pub do_classes: Vec<String>,
     /// Subset of `do_classes` that are SQLite-backed (from migrations).
     pub sqlite_classes: Vec<String>,
+    /// Durable Object classes that opt into analytics durability (outbox drain).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub analytics_classes: Vec<String>,
     pub modules: Vec<ModuleRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assets: Option<AssetManifestRef>,

@@ -625,6 +625,23 @@ impl Bucket {
         }
     }
 
+    /// Share an existing object store (for the in-process LTX replicator).
+    pub(crate) fn sharing(
+        store: Arc<dyn ObjectStore>,
+        backend: StorageBackend,
+        name: String,
+        prefix: String,
+    ) -> Self {
+        Self {
+            store: store.clone(),
+            paginated: Arc::new(crate::file_store::ListedPages(store.clone())),
+            cas_store: store,
+            backend,
+            name,
+            prefix,
+        }
+    }
+
     /// `bucket` is `[s3://|gs://|az://|file://]NAME[/PREFIX]`. With a PREFIX every
     /// key this client reads or writes lives under `PREFIX/`, so several
     /// fleets can share one bucket without colliding.

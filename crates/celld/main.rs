@@ -889,6 +889,7 @@ async fn adopt_deployment(
         node: node.to_string(),
         region: region.to_string(),
     };
+    let analytics_classes = graph.analytics_classes();
     // Building compiles every script, so it runs on a blocking thread.
     let built = tokio::task::spawn_blocking(move || Generation::build(id, graph, options)).await;
     let generation = match built {
@@ -897,6 +898,9 @@ async fn adopt_deployment(
         Err(error) => return failed(format!("generation build panicked: {error}")),
     };
     let adopted = runtime.adopt(generation);
+    if let Some(replication) = runtime.replication() {
+        replication.configure_analytics(&analytics_classes);
+    }
     // Tell the core, so resident cells move to the new generation at their
     // safe points. The reserved cells move at once, ahead of the cron arm
     // below, which must reach a cron cell already running the new schedule.
@@ -3576,6 +3580,7 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
         Action::Deploy(arguments) => return fleet::run_deploy(arguments).await,
         Action::Dev(arguments) => return celld::dev::run(arguments).await,
         Action::Cell(arguments) => return celld::cell_cli::run(arguments).await,
+        Action::Lake(arguments) => return celld::lake::run_cli(arguments).await,
         Action::D1(arguments) => return celld::d1_cli::run(arguments).await,
         Action::Kv(arguments) => return celld::kv_cli::run(arguments).await,
         Action::Queue(arguments) => return celld::queue_cli::run(arguments).await,
@@ -3870,13 +3875,15 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
             // of today's manifest. Start it even for a stateless deployment
             // so a later deployment can introduce cells without changing the
             // durability contract underneath the node.
-            let replication = Some(Replication::start(
+            let replication = Replication::start(
                 client.clone(),
                 &data_dir,
                 settings.endpoint.clone(),
                 settings.region.clone(),
                 storage_credentials.clone(),
-            )?);
+            )?;
+            replication.configure_analytics(&graph.analytics_classes());
+            let replication = Some(replication);
             // The same two calls a reload makes: there is no boot-only way from
             // a deployment to a serving generation.
             let generation = Generation::build(
@@ -4103,6 +4110,7 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
                     assets: None,
                     services: Vec::new(),
                     crons,
+                    analytics_classes: Vec::new(),
                     containers: Vec::new(),
                     fence_image: None,
                 }),

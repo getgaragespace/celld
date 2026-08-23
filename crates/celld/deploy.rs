@@ -293,6 +293,7 @@ struct Project {
     metadata: Value,
     do_classes: Vec<String>,
     sqlite_classes: Vec<String>,
+    analytics_classes: Vec<String>,
     crons: Vec<String>,
     has_workflows: bool,
     has_kv: bool,
@@ -660,6 +661,7 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
         main_module: project.entry.as_ref().map(|_| module_name.clone()),
         do_classes: project.do_classes,
         sqlite_classes: project.sqlite_classes,
+        analytics_classes: project.analytics_classes,
         modules: modules
             .iter()
             .map(|(name, bytes)| ModuleRef {
@@ -1934,6 +1936,9 @@ fn read_project(
             json!({ "new_sqlite_classes": sqlite_classes }),
         );
     }
+    let analytics_classes: Vec<String> = crate::analytics::analytics_classes_from_config(object)
+        .into_iter()
+        .collect();
 
     let containers = read_containers(object, &do_classes, &sqlite_classes)?;
     Ok(Project {
@@ -1945,6 +1950,7 @@ fn read_project(
         metadata: Value::Object(metadata),
         do_classes,
         sqlite_classes,
+        analytics_classes,
         crons,
         has_workflows: !workflows.is_empty(),
         has_kv: !kv_namespaces.is_empty(),
