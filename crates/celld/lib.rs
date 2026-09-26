@@ -338,6 +338,7 @@ pub mod deploy;
 pub mod dev;
 pub mod docker;
 pub mod drain_token;
+pub mod embed;
 pub mod engine_api;
 pub mod env_vars;
 #[cfg(celld_internal_tests)]

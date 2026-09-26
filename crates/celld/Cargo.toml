@@ -15,7 +15,7 @@ path = "main.rs"
 
 [lints.rust.unexpected_cfgs]
 level = "warn"
-check-cfg = ["cfg(celld_internal_tests)", "cfg(celld_proxy_internals)"]
+check-cfg = ["cfg(celld_internal_tests)", "cfg(celld_proxy_internals)", "cfg(celld_embed)"]
 
 [lints.clippy]
 disallowed_macros = "forbid"

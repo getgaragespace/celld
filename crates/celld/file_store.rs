@@ -19,12 +19,12 @@ use object_store::{
     MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload,
     PutResult,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::{File, OpenOptions};
 use std::ops::Range;
 use std::path::{Path as FsPath, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Advisory lock file name in the fleet root; serializes conditional writes
 /// across processes sharing one `file://` directory.
@@ -129,19 +129,48 @@ impl Debug for ConditionalLocalFileSystem {
     }
 }
 
+/// The object and paginated-listing faces of one fleet store.
+type FleetStore = (Arc<dyn ObjectStore>, Arc<dyn PaginatedListStore>);
+
+/// Stores that an embedding host supplies for `file://` roots, keyed by the
+/// root exactly as the bucket spec names it.
+static HOST_STORES: OnceLock<Mutex<HashMap<PathBuf, FleetStore>>> = OnceLock::new();
+
+/// Serve the `file://` fleet root `root` from `store` instead of the local
+/// filesystem. The store must provide the same conditional-write contract as
+/// [`ConditionalLocalFileSystem`]: `PutMode::Create`, `PutMode::Update` by
+/// etag, and user metadata.
+pub fn register_host_store<S>(root: impl Into<PathBuf>, store: Arc<S>)
+where
+    S: ObjectStore + PaginatedListStore,
+{
+    HOST_STORES
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .insert(root.into(), (store.clone(), store));
+}
+
 impl ConditionalLocalFileSystem {
     /// Opens a local fleet root, creating it when absent.
-    pub(crate) fn open(root: impl AsRef<FsPath>) -> Result<Arc<Self>, Error> {
+    pub(crate) fn open(root: impl AsRef<FsPath>) -> Result<FleetStore, Error> {
         let root = root.as_ref();
+        if let Some(store) = HOST_STORES
+            .get()
+            .and_then(|stores| stores.lock().unwrap().get(root).cloned())
+        {
+            return Ok(store);
+        }
         std::fs::create_dir_all(root).map_err(|source| Error::Generic {
             store: "ConditionalLocalFileSystem",
             source: Box::new(source),
         })?;
         let inner = Arc::new(LocalFileSystem::new_with_prefix(root)?);
-        Ok(Arc::new(Self {
+        let store = Arc::new(Self {
             inner,
             root: root.to_path_buf(),
-        }))
+        });
+        Ok((store.clone(), store))
     }
 
     fn persist_attributes(&self, location: &Path, attributes: &Attributes) -> Result<(), Error> {

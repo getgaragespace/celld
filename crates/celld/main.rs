@@ -46,6 +46,11 @@ use tokio::sync::{mpsc, oneshot, watch};
 // acquisition. On a 16-core host jemalloc measured 20% more hello-world
 // throughput than glibc (mimalloc 11%), and returned the ~7% of the machine
 // that arena-lock sleeps reported as idle.
+//
+// An embedded node lives in a shared library that the host loads with
+// dlopen, and jemalloc's initial-exec TLS cannot be allocated there; the host
+// process keeps its own allocator.
+#[cfg(not(celld_embed))]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
@@ -143,6 +148,12 @@ fn record_connection_error(
 
 fn exit_flushed(code: i32) -> ! {
     drop(LOG_GUARD.lock().unwrap().take());
+    if let Some(embedding) = celld::embed::get() {
+        (embedding.on_exit)(code);
+        loop {
+            std::thread::park();
+        }
+    }
     std::process::exit(code);
 }
 
@@ -3421,6 +3432,22 @@ async fn recover_with_follower_listener(
     while connections.next().await.is_some() {}
     result
 }
+
+/// Resolve on the first SIGTERM or SIGINT, or never when the node has no
+/// signal handlers of its own.
+async fn stop_signal(
+    signals: &mut Option<(tokio::signal::unix::Signal, tokio::signal::unix::Signal)>,
+) {
+    match signals {
+        Some((terminate, interrupt)) => {
+            celld::asyncrt::select! {
+                _ = terminate.recv() => {}
+                _ = interrupt.recv() => {}
+            }
+        }
+        None => std::future::pending().await,
+    }
+}
 #[path = "main/cli.rs"]
 mod cli;
 use cli::{action_from_process, print_help, Action};
@@ -3517,7 +3544,9 @@ fn main() -> anyhow::Result<()> {
     builder.build()?.block_on(async_main(telemetry_config))
 }
 
-async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyhow::Result<()> {
+pub(crate) async fn async_main(
+    telemetry_config: Option<celld::telemetry::Config>,
+) -> anyhow::Result<()> {
     #[cfg(all(test, celld_internal_tests))]
     let shutdown_accept_failure_test_active =
         std::env::var_os("CELLD_DRAIN_ACCEPT_FAILURE_CHILD").is_some();
@@ -4746,6 +4775,9 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
         internal_listener.local_addr()?,
         app.advertise
     ))?;
+    if let Some(embedding) = celld::embed::get() {
+        (embedding.on_listening)(listener.local_addr()?, internal_listener.local_addr()?);
+    }
     let (shutdown_tx, mut shutdown_rx) = mpsc::unbounded_channel();
     #[cfg(all(test, celld_internal_tests))]
     if shutdown_accept_failure_test_active {
@@ -4754,8 +4786,16 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
     // A SIGTERM (systemd stop, `docker stop`, a Kubernetes pod delete) or a
     // SIGINT begins the same graceful shutdown as `POST /shutdown`, so the
     // orchestrator's ordinary stop drains and hands off instead of killing.
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+    // The signals belong to an embedding host, which stops the node through
+    // `POST /shutdown` instead.
+    let mut signals = if celld::embed::get().is_none() {
+        Some((
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?,
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?,
+        ))
+    } else {
+        None
+    };
     let (connection_drain_tx, connection_drain) = watch::channel(false);
     let shutdown_timing = celld::env_vars::shutdown_timing()?;
     let drain_ms = shutdown_timing.drain_no_progress_ms;
@@ -4903,8 +4943,7 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
                 }));
             }
             mode = shutdown_rx.recv() => break mode.unwrap_or(ShutdownMode::Handoff),
-            _ = sigterm.recv() => break ShutdownMode::Handoff,
-            _ = sigint.recv() => break ShutdownMode::Handoff,
+            () = stop_signal(&mut signals) => break ShutdownMode::Handoff,
             code = fence_rx.recv() => {
                 exit_flushed(code.unwrap_or(3));
             }
