@@ -78,7 +78,11 @@ async function startCelld(options = {}) {
   let exit = null;
   let resolveExit;
   const exited = new Promise((resolve) => (resolveExit = resolve));
-  const variables = { RUST_LOG: "warn", ...options.env };
+  // A graceful stop hands each cell to a successor node and waits for the
+  // adoption. An embedded node has no peers, so it would sit out the whole
+  // no-progress window (25 s at celld's default budget) after its cells are
+  // already durable in the bucket and released.
+  const variables = { RUST_LOG: "warn", CELLD_SHUTDOWN_TOTAL_MS: "3000", ...options.env };
   const listening = await native.start(
     ["--bucket", bucketSpec, "--listen", "127.0.0.1:0", "--internal-listen", "127.0.0.1:0", "--no-control-plane"],
     variables,

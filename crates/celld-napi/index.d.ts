@@ -28,7 +28,11 @@ export interface CelldOptions {
   state?: string;
   /** The esbuild executable for Worker code. Defaults to the installed `esbuild` package. */
   esbuild?: string;
-  /** `CELLD_*` and `RUST_LOG` settings for the node. `RUST_LOG` defaults to `warn`. */
+  /**
+   * `CELLD_*` and `RUST_LOG` settings for the node. `RUST_LOG` defaults to
+   * `warn` and `CELLD_SHUTDOWN_TOTAL_MS` to `3000`: with no peer to adopt its
+   * cells, a stopping node would otherwise wait out celld's full drain budget.
+   */
   env?: Record<string, string>;
 }
 
