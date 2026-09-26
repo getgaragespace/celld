@@ -3,6 +3,10 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+# The Node-API addon builds only when named (`-p celld-napi`). Building it in
+# the same invocation as the binary would unify its jemalloc features into the
+# binary's.
+default-members = ["crates/celld", "crates/logic", "crates/ltx"]
 
 # Size-tuned: fat LTO prunes unused dependency code, panic=abort drops
 # unwind tables. opt-level "s" (not "z") — measure RPS before trading further.
@@ -42,6 +46,7 @@ async-trait = "0.1"
 axum = { version = "0.7", features = ["multipart"] }
 base64 = "0.22"
 bytes = "1"
+celld = { path = "crates/celld" }
 celld-logic = { path = "crates/logic" }
 celld-ltx = { path = "crates/ltx" }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
@@ -80,6 +85,12 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 libc = "0.2"
 lz4_flex = { version = "0.11", features = ["frame"] }
 md-5 = "0.10"
+# The Node-API addon (crates/celld-napi). napi4 is the floor for thread-safe
+# functions, which the host filesystem bridge needs; Bun and Node both
+# provide it.
+napi = { version = "2.16", default-features = false, features = ["napi4"] }
+napi-build = "2"
+napi-derive = "2"
 nix = { version = "0.31", features = ["feature", "fs"] }
 notify = "8"
 nu-ansi-term = "0.50"
@@ -136,6 +147,7 @@ thiserror = "2"
 # its timer. Runtime enablement alone failed in the Linux image, so the cgroup
 # hard-cap latch stayed closed after a node shed its cells.
 tikv-jemalloc-ctl = { version = "0.6", features = ["stats"] }
+tikv-jemalloc-sys = "0.6"
 tikv-jemallocator = { version = "0.6", features = ["background_threads", "stats"] }
 tokio = "1"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }

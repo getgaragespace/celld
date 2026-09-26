@@ -1,0 +1,106 @@
+# A celld node as a Node-API addon, for Bun and Node. The crate compiles the
+# standalone binary's `main.rs` as a module (see src/lib.rs) and runs it on
+# host-supplied storage: a `node:vfs` VirtualFileSystem holds the fleet bucket
+# and every local file the node writes.
+[package]
+name = "celld-napi"
+version = "0.3.0"
+edition = "2021"
+rust-version = "1.94.1"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+# The Node-API symbols resolve only inside a host process, so a Rust test
+# harness cannot link this crate. The addon's tests run under Bun and Node.
+test = false
+doctest = false
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ["cfg(celld_embed)", "cfg(celld_internal_tests)", "cfg(celld_proxy_internals)"]
+
+# `main.rs` brings the binary's dependencies with it, so this list mirrors
+# crates/celld's.
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+aes.workspace = true
+aes-gcm.workspace = true
+cbc.workspace = true
+ctr.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+base64.workspace = true
+bytes.workspace = true
+celld-logic.workspace = true
+celld-ltx = { workspace = true, features = ["s3"] }
+encoding_rs.workspace = true
+ed25519-dalek.workspace = true
+fastwebsockets.workspace = true
+flate2.workspace = true
+futures-util.workspace = true
+getrandom.workspace = true
+glob.workspace = true
+hkdf.workspace = true
+lol_html.workspace = true
+hmac.workspace = true
+http-body-util.workspace = true
+httpdate.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+md-5.workspace = true
+notify.workspace = true
+nu-ansi-term.workspace = true
+object_store = { workspace = true, features = ["aws", "azure", "fs", "gcp"] }
+parquet.workspace = true
+pbkdf2.workspace = true
+percent-encoding.workspace = true
+p256.workspace = true
+p384.workspace = true
+p521.workspace = true
+pkcs8.workspace = true
+crc.workspace = true
+dsa.workspace = true
+x25519-dalek.workspace = true
+rand.workspace = true
+regex.workspace = true
+reqwest = { workspace = true, features = ["rustls-tls", "stream", "json"] }
+rusqlite = { workspace = true, features = ["backup", "bundled", "hooks", "serialize"] }
+sqlite-vec.workspace = true
+rustls.workspace = true
+rsa.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+tempfile.workspace = true
+tikv-jemalloc-ctl.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tokio-rustls.workspace = true
+tokio-stream.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+urlpattern.workspace = true
+v8.workspace = true
+webpki-roots.workspace = true
+celld.workspace = true
+napi.workspace = true
+napi-derive.workspace = true
+# celld links jemalloc for its memory accounting. A library that a host
+# loads with dlopen cannot use initial-exec TLS: glibc refuses it with
+# "cannot allocate memory in static TLS block".
+tikv-jemalloc-sys = { workspace = true, features = ["disable_initial_exec_tls"] }
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+nix.workspace = true
+
+[build-dependencies]
+napi-build.workspace = true
