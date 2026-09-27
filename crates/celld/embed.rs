@@ -38,3 +38,10 @@ pub fn install(embedding: Embedding) -> anyhow::Result<()> {
 pub fn get() -> Option<&'static Embedding> {
     EMBEDDING.get()
 }
+
+/// Whether a successor can adopt a cell this node releases. An embedded node
+/// runs alone, so its shutdown must not wait for one: the release has already
+/// made each cell durable and unowned, and the next node to start claims it.
+pub fn peerless() -> bool {
+    get().is_some()
+}
