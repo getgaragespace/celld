@@ -9,14 +9,15 @@
 
 use crate::bridge::HostFs;
 use bytes::Bytes;
+use celld::file_store::{attributes_to_map, map_to_attributes};
 use chrono::{DateTime, TimeZone, Utc};
 use futures_util::stream::{self, BoxStream, StreamExt};
 use object_store::list::{PaginatedListOptions, PaginatedListResult, PaginatedListStore};
 use object_store::path::Path;
 use object_store::{
-    Attribute, Attributes, Error, GetOptions, GetRange, GetResult, GetResultPayload, ListResult,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload,
-    PutResult, Result, UploadPart,
+    Error, GetOptions, GetRange, GetResult, GetResultPayload, ListResult, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    Result, UploadPart,
 };
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
@@ -74,27 +75,6 @@ fn timestamp(millis: i64) -> DateTime<Utc> {
     Utc.timestamp_millis_opt(millis)
         .single()
         .unwrap_or_default()
-}
-
-fn metadata_of(attributes: &Attributes) -> BTreeMap<String, String> {
-    attributes
-        .iter()
-        .filter_map(|(key, value)| match key {
-            Attribute::Metadata(name) => Some((name.to_string(), value.as_ref().to_string())),
-            _ => None,
-        })
-        .collect()
-}
-
-fn attributes_of(metadata: &BTreeMap<String, String>) -> Attributes {
-    let mut attributes = Attributes::new();
-    for (name, value) in metadata {
-        attributes.insert(
-            Attribute::Metadata(name.clone().into()),
-            value.clone().into(),
-        );
-    }
-    attributes
 }
 
 fn resolve_range(range: &GetRange, len: u64) -> std::result::Result<Range<u64>, String> {
@@ -336,7 +316,7 @@ impl ObjectStore for HostObjectStore {
     ) -> Result<PutResult> {
         let location = location.clone();
         let bytes = Bytes::from(payload);
-        let metadata = metadata_of(&opts.attributes);
+        let metadata = attributes_to_map(&opts.attributes);
         self.run(move |inner| inner.put(&location, &bytes, opts.mode, metadata))
             .await
     }
@@ -349,7 +329,7 @@ impl ObjectStore for HostObjectStore {
         Ok(Box::new(HostUpload {
             store: self.clone(),
             location: location.clone(),
-            metadata: metadata_of(&opts.attributes),
+            metadata: attributes_to_map(&opts.attributes),
             parts: Arc::new(Mutex::new(Vec::new())),
         }))
     }
@@ -359,7 +339,7 @@ impl ObjectStore for HostObjectStore {
         self.run(move |inner| {
             let stored = inner.stored(&location)?;
             check_preconditions(&options, &stored.meta)?;
-            let attributes = attributes_of(&stored.metadata);
+            let attributes = map_to_attributes(stored.metadata);
             let size = stored.meta.size;
             let range = match &options.range {
                 Some(range) => resolve_range(range, size).map_err(|message| Error::Generic {

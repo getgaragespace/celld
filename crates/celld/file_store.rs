@@ -62,20 +62,52 @@ fn meta_path_for(data_path: &FsPath) -> PathBuf {
     PathBuf::from(sidecar)
 }
 
-fn attributes_to_map(attributes: &Attributes) -> BTreeMap<String, String> {
+/// The sidecar key of each attribute that is not user metadata. A metadata
+/// name is an HTTP header name, which cannot hold a colon, so no key here can
+/// collide with one, and a sidecar written before these keys existed reads
+/// unchanged.
+fn standard_attributes() -> [(Attribute, &'static str); 6] {
+    [
+        (Attribute::ContentDisposition, ":content-disposition"),
+        (Attribute::ContentEncoding, ":content-encoding"),
+        (Attribute::ContentLanguage, ":content-language"),
+        (Attribute::ContentType, ":content-type"),
+        (Attribute::CacheControl, ":cache-control"),
+        (Attribute::StorageClass, ":storage-class"),
+    ]
+}
+
+/// An object's attributes as the string map its sidecar stores. R2 keeps an
+/// object's content headers in the standard attributes, so dropping them
+/// loses its `httpMetadata`.
+pub fn attributes_to_map(attributes: &Attributes) -> BTreeMap<String, String> {
+    let standard = standard_attributes();
     attributes
         .iter()
-        .filter_map(|(key, value)| match key {
-            Attribute::Metadata(name) => Some((name.to_string(), value.as_ref().to_string())),
-            _ => None,
+        .filter_map(|(key, value)| {
+            let name = match key {
+                Attribute::Metadata(name) => name.to_string(),
+                other => standard
+                    .iter()
+                    .find(|(attribute, _)| attribute == other)?
+                    .1
+                    .to_string(),
+            };
+            Some((name, value.as_ref().to_string()))
         })
         .collect()
 }
 
-fn map_to_attributes(map: BTreeMap<String, String>) -> Attributes {
+pub fn map_to_attributes(map: BTreeMap<String, String>) -> Attributes {
+    let standard = standard_attributes();
     let mut attributes = Attributes::new();
     for (name, value) in map {
-        attributes.insert(Attribute::Metadata(name.into()), value.into());
+        let key = standard
+            .iter()
+            .find(|(_, key)| *key == name)
+            .map(|(attribute, _)| attribute.clone())
+            .unwrap_or_else(|| Attribute::Metadata(name.into()));
+        attributes.insert(key, value.into());
     }
     attributes
 }
@@ -422,4 +454,35 @@ pub fn paginate_listing(
         result.objects.extend(object);
     }
     Ok(PaginatedListResult { result, page_token })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn value<'a>(attributes: &'a Attributes, key: &Attribute) -> Option<&'a str> {
+        attributes.get(key).map(|value| value.as_ref())
+    }
+
+    #[test]
+    fn content_headers_survive_the_sidecar() {
+        let mut attributes = Attributes::new();
+        attributes.insert(Attribute::ContentType, "text/plain".into());
+        attributes.insert(Attribute::CacheControl, "no-store".into());
+        attributes.insert(Attribute::Metadata("envelope".into()), "{}".into());
+        let map = attributes_to_map(&attributes);
+        assert_eq!(map.len(), 3);
+        let read = map_to_attributes(map);
+        assert_eq!(value(&read, &Attribute::ContentType), Some("text/plain"));
+        assert_eq!(value(&read, &Attribute::CacheControl), Some("no-store"));
+        assert_eq!(value(&read, &Attribute::Metadata("envelope".into())), Some("{}"));
+    }
+
+    #[test]
+    fn a_metadata_name_is_never_a_content_header() {
+        let map = BTreeMap::from([("content-type".to_string(), "x".to_string())]);
+        let read = map_to_attributes(map);
+        assert_eq!(value(&read, &Attribute::ContentType), None);
+        assert_eq!(value(&read, &Attribute::Metadata("content-type".into())), Some("x"));
+    }
 }
