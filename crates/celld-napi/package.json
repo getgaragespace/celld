@@ -2,7 +2,7 @@
   "name": "@celld/napi",
   "version": "0.3.0",
   "private": true,
-  "description": "A celld node inside a Bun or Node process, with its storage in node:vfs",
+  "description": "A celld node inside a Bun or Node process, driven like Miniflare, with its storage in node:vfs",
   "license": "Apache-2.0",
   "main": "index.js",
   "types": "index.d.ts",
