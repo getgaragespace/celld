@@ -61,8 +61,10 @@ pub enum Format {
 #[macro_export]
 macro_rules! note {
     ($($arg:tt)*) => {{
-        use std::io::Write as _;
-        let _ = writeln!(std::io::stderr(), $($arg)*);
+        if !$crate::embed::quiet() {
+            use std::io::Write as _;
+            let _ = writeln!(std::io::stderr(), $($arg)*);
+        }
     }};
 }
 
@@ -95,7 +97,7 @@ impl<W: Write> Sink<W> {
         &mut self,
         operation: impl FnOnce(&mut W) -> std::io::Result<()>,
     ) -> anyhow::Result<()> {
-        if self.closed {
+        if self.closed || crate::embed::quiet() {
             return Ok(());
         }
         match operation(&mut self.data) {

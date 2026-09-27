@@ -102,6 +102,14 @@ pub fn install_host_storage(
     Ok(())
 }
 
+/// Whether deploys and the node print their command-line output (the deploy
+/// report, the listener lines). Warnings and errors go through `RUST_LOG`
+/// either way.
+#[napi]
+pub fn set_quiet(quiet: bool) {
+    celld::embed::set_quiet(quiet);
+}
+
 type Deferred<T> = JsDeferred<T, Box<dyn FnOnce(Env) -> Result<T> + Send>>;
 
 /// Deploy a Wrangler project into the fleet bucket, as `celld deploy` does.

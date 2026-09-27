@@ -9,6 +9,8 @@
 //! code instead of ending the host process.
 
 use std::net::SocketAddr;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
 
 type ListeningHook = Box<dyn Fn(SocketAddr, SocketAddr) + Send + Sync>;
@@ -44,4 +46,17 @@ pub fn get() -> Option<&'static Embedding> {
 /// made each cell durable and unowned, and the next node to start claims it.
 pub fn peerless() -> bool {
     get().is_some()
+}
+
+static QUIET: AtomicBool = AtomicBool::new(false);
+
+/// Drop what commands print for a person or a pipe (deploy reports, listener
+/// lines). A host that is a library has no terminal of its own to print to;
+/// `tracing` still reports warnings and errors.
+pub fn set_quiet(quiet: bool) {
+    QUIET.store(quiet, Ordering::Relaxed);
+}
+
+pub fn quiet() -> bool {
+    QUIET.load(Ordering::Relaxed)
 }

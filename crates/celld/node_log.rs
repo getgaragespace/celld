@@ -5501,10 +5501,11 @@ impl NodeLogManager {
         }
         let transition = self.live_log.lock().await;
         debug_assert!(!transition.is_running());
-        // eprintln, not tracing: this runs on the way out of the process,
-        // and buffered stdout may never flush before exit.
+        // stderr, not tracing: this runs on the way out of the process,
+        // and buffered stdout may never flush before exit. The routine
+        // outcomes are notes, which a quiet embedding drops.
         let Some(current) = transition.current() else {
-            eprintln!("node-log close: no folded log; nothing to seal");
+            crate::note!("node-log close: no folded log; nothing to seal");
             return;
         };
         let Ok(record) = log_from_wire(&current) else {
@@ -5547,7 +5548,7 @@ impl NodeLogManager {
             .write(Some(log_to_wire(&sealed, may_have_fleet_acks)))
             .await
         {
-            Ok(()) => eprintln!("node-log close: sealed epoch {}", sealed.epoch),
+            Ok(()) => crate::note!("node-log close: sealed epoch {}", sealed.epoch),
             Err(error) => eprintln!("node-log close: seal not durable: {error:#}"),
         }
     }
