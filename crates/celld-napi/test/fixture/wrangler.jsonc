@@ -1,0 +1,17 @@
+{
+  "name": "celld-napi-fixture",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  // Every binding kind the host's env proxies cover.
+  "vars": { "GREETING": "hello" },
+  "durable_objects": { "bindings": [{ "name": "COUNTER", "class_name": "Counter" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Counter"] }],
+  "d1_databases": [{ "binding": "DB", "database_name": "guestbook" }],
+  "kv_namespaces": [{ "binding": "KV", "id": "fixture-kv" }],
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "fixture-files" }],
+  "queues": {
+    "producers": [{ "binding": "JOBS", "queue": "jobs" }],
+    "consumers": [{ "queue": "jobs", "max_batch_timeout": 0 }],
+  },
+  "services": [{ "binding": "SELF", "service": "celld-napi-fixture", "entrypoint": "Greeter" }],
+}

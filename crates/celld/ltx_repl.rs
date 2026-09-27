@@ -1215,10 +1215,9 @@ impl LtxRepl {
             crate::bucket::StorageBackend::Gcs => crate::bucket::gcs_replica_store(&bucket)?,
             crate::bucket::StorageBackend::Azure => crate::bucket::azure_replica_store(&bucket)?,
             crate::bucket::StorageBackend::File => {
-                let store: Arc<dyn ObjectStore> =
-                    crate::file_store::ConditionalLocalFileSystem::open(&bucket)
-                        .map_err(|error| anyhow!("build shared object store: {error}"))?;
-                store
+                crate::file_store::ConditionalLocalFileSystem::open(&bucket)
+                    .map_err(|error| anyhow!("build shared object store: {error}"))?
+                    .0
             }
             crate::bucket::StorageBackend::S3 => {
                 node_config(&bucket, endpoint.as_deref(), &region, credentials.as_ref())

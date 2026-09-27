@@ -27,6 +27,12 @@ static FALLBACK_SERVICES: OnceLock<Arc<HostServices>> = OnceLock::new();
 static RUNTIME_SERVICES: OnceLock<Mutex<HashMap<tokio::runtime::Id, Weak<HostServices>>>> =
     OnceLock::new();
 static SELECT_STATE: OnceLock<AtomicU64> = OnceLock::new();
+static HOST_FILESYSTEM: OnceLock<HostFilesystem> = OnceLock::new();
+
+struct HostFilesystem {
+    filesystem: Arc<dyn celld_ltx::FileSystem>,
+    name_max: i64,
+}
 
 thread_local! {
     static SPAWNS: RefCell<Vec<Spawn>> = const { RefCell::new(Vec::new()) };
@@ -50,7 +56,10 @@ impl ProductionDomain {
         Self {
             owner,
             services,
-            filesystem: Arc::new(celld_ltx::DirectFileSystem),
+            filesystem: HOST_FILESYSTEM
+                .get()
+                .map(|host| host.filesystem.clone())
+                .unwrap_or_else(|| Arc::new(celld_ltx::DirectFileSystem)),
             next_core_request: AtomicU64::new(1),
             next_async_op: AtomicU64::new(1),
             process_tag: u64::from(std::process::id()),
@@ -224,8 +233,31 @@ pub fn fs() -> Arc<dyn celld_ltx::FileSystem> {
     current_domain().filesystem.clone()
 }
 
+/// Replace the process filesystem before the process domain exists. An
+/// embedding host uses this to keep node storage out of the real filesystem;
+/// `name_max` stands in for the `NAME_MAX` that a host filesystem cannot
+/// report through `fpathconf`.
+pub fn install_filesystem(
+    filesystem: Arc<dyn celld_ltx::FileSystem>,
+    name_max: i64,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        PROCESS_DOMAIN.get().is_none(),
+        "the process filesystem must be installed before the runtime starts"
+    );
+    HOST_FILESYSTEM
+        .set(HostFilesystem {
+            filesystem,
+            name_max,
+        })
+        .map_err(|_| anyhow::anyhow!("a process filesystem is already installed"))
+}
+
 /// Return the maximum component length for the filesystem at `path`.
 pub fn filesystem_name_max(path: &std::path::Path) -> std::io::Result<Option<i64>> {
+    if let Some(host) = HOST_FILESYSTEM.get() {
+        return Ok(Some(host.name_max));
+    }
     let directory = std::fs::File::open(path)?;
     nix::unistd::fpathconf(&directory, nix::unistd::PathconfVar::NAME_MAX).map_err(Into::into)
 }

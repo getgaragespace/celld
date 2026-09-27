@@ -1,25 +1,29 @@
+# A celld node as a Node-API addon, for Bun and Node. The crate compiles the
+# standalone binary's `main.rs` as a module (see src/lib.rs) and runs it on
+# host-supplied storage: a `node:vfs` VirtualFileSystem holds the fleet bucket
+# and every local file the node writes.
 [package]
-name = "celld"
-version = "0.6.0"
+name = "celld-napi"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.94.1"
 license = "Apache-2.0"
-
+publish = false
 
 [lib]
-path = "lib.rs"
-
-[[bin]]
-name = "celld"
-path = "main.rs"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+# The Node-API symbols resolve only inside a host process, so a Rust test
+# harness cannot link this crate. The addon's tests run under Bun and Node.
+test = false
+doctest = false
 
 [lints.rust.unexpected_cfgs]
 level = "warn"
-check-cfg = ["cfg(celld_internal_tests)", "cfg(celld_proxy_internals)", "cfg(celld_embed)"]
+check-cfg = ["cfg(celld_embed)", "cfg(celld_internal_tests)", "cfg(celld_proxy_internals)"]
 
-[lints.clippy]
-disallowed_macros = "forbid"
-
+# `main.rs` brings the binary's dependencies with it, so this list mirrors
+# crates/celld's.
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
@@ -75,7 +79,6 @@ sha2.workspace = true
 subtle.workspace = true
 tempfile.workspace = true
 tikv-jemalloc-ctl.workspace = true
-tikv-jemallocator.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tokio-rustls.workspace = true
 tokio-stream.workspace = true
@@ -87,17 +90,17 @@ url.workspace = true
 urlpattern.workspace = true
 v8.workspace = true
 webpki-roots.workspace = true
+celld.workspace = true
+napi.workspace = true
+napi-derive.workspace = true
+# celld links jemalloc for its memory accounting. A library that a host
+# loads with dlopen cannot use initial-exec TLS: glibc refuses it with
+# "cannot allocate memory in static TLS block".
+tikv-jemalloc-sys = { workspace = true, features = ["disable_initial_exec_tls"] }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 nix.workspace = true
 
-[dev-dependencies]
-anyhow.workspace = true
-async-trait.workspace = true
-duckdb = { version = "1.2", features = ["bundled"] }
-futures-util.workspace = true
-lz4_flex.workspace = true
-serde_json.workspace = true
-tempfile.workspace = true
-tokio = { workspace = true, features = ["full"] }
+[build-dependencies]
+napi-build.workspace = true

@@ -879,9 +879,10 @@ impl Bucket {
                     anyhow::bail!("a file:// bucket cannot use S3 static credentials");
                 }
                 let root = std::path::Path::new(bucket);
-                let store = crate::file_store::ConditionalLocalFileSystem::open(root)
-                    .context("build local filesystem client")?;
-                (store.clone(), store.clone(), store)
+                let (store, paginated) =
+                    crate::file_store::ConditionalLocalFileSystem::open(root)
+                        .context("build local filesystem client")?;
+                (store.clone(), paginated, store)
             }
         };
         Ok(Bucket {

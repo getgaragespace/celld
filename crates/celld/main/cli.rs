@@ -69,7 +69,10 @@ impl Action {
 }
 
 pub(crate) fn action_from_process() -> anyhow::Result<Action> {
-    let mut arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    let mut arguments = match celld::embed::get() {
+        Some(embedding) => embedding.arguments.clone(),
+        None => std::env::args().skip(1).collect::<Vec<_>>(),
+    };
     if let Some(action) = arguments.first().map(String::as_str) {
         let arguments = arguments[1..].to_vec();
         match action {

@@ -3385,9 +3385,10 @@ impl Actor {
                 released_epoch,
                 rebalance,
             } => {
-                // The in-memory adapter is one process, so it has no successor
-                // to acknowledge a handoff.
-                if matches!(&self.ownership, Ownership::Memory(_)) {
+                // The in-memory adapter is one process, and an embedded node
+                // runs alone, so neither has a successor to acknowledge a
+                // handoff.
+                if matches!(&self.ownership, Ownership::Memory(_)) || crate::embed::peerless() {
                     immediate.push_back(Event::SuccessorAdopted {
                         op,
                         result: Err(Failure::Definite),
